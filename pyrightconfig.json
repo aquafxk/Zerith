@@ -1,0 +1,6 @@
+{
+  "include": ["core.py", "main.py", "cogs"],
+  "typeCheckingMode": "off",
+  "reportUnusedCoroutine": "error",
+  "pythonVersion": "3.10"
+}

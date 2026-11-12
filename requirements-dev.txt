@@ -1,0 +1,2 @@
+# Verifica corrotinas criadas sem await (incluindo helpers async do core.py).
+pyright>=1.1.390

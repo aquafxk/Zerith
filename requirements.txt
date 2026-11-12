@@ -1,0 +1,11 @@
+aiosqlite>=0.20.0,<0.21
+discord.py>=2.6.4,<3.0
+python-dotenv
+aiohttp>=3.9
+yt-dlp[default,curl-cffi]
+yt-dlp-ejs
+gallery-dl>=1.32.19,<2.0
+# Opcional: cartão de imagem das boas-vindas (sem ele, sai só o embed)
+Pillow>=10.1
+groq>=0.11.0
+google-generativeai>=0.8.0
