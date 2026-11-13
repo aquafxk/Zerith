@@ -1,3 +1,4 @@
+"""Descoberta automatica de modelos de IA (Groq, Gemini, Hugging Face)."""
 from __future__ import annotations
 
 import asyncio
@@ -5,36 +6,35 @@ import logging
 import os
 from typing import Any
 
-from dotenv import load_dotenv
-from groq import Groq
-import google.generativeai as genai
+import aiohttp
 
 log = logging.getLogger("hellsing.ai_discovery")
-load_dotenv()
 
 
 def _groq_models_sync(api_key: str) -> list[dict[str, Any]]:
-    client = Groq(api_key=api_key, timeout=30.0, max_retries=2)
+    from groq import Groq
+    client = Groq(api_key=api_key)
     try:
-        response = client.models.list()
         models = []
-        for model in response.data:
-            context = getattr(model, "context_window", None)
-            output = getattr(model, "max_completion_tokens", None)
+        for item in client.models.list().data:
+            mid = getattr(item, "id", None)
+            if not mid:
+                continue
             models.append({
-                "id": model.id,
+                "id": mid,
                 "provider": "groq",
-                "context_window": context,
-                "max_input_tokens": max(0, context - output) if isinstance(context, int) and isinstance(output, int) else None,
-                "max_output_tokens": output,
                 "available": True,
             })
         return models
     finally:
-        client.close()
+        try:
+            client.close()
+        except Exception:
+            pass
 
 
 def _gemini_models_sync(api_key: str) -> list[dict[str, Any]]:
+    import google.generativeai as genai
     genai.configure(api_key=api_key)
     models = []
     for model in genai.list_models():
@@ -44,29 +44,51 @@ def _gemini_models_sync(api_key: str) -> list[dict[str, Any]]:
         models.append({
             "id": model.name.removeprefix("models/"),
             "provider": "gemini",
-            "context_window": getattr(model, "input_token_limit", None),
-            "max_input_tokens": getattr(model, "input_token_limit", None),
-            "max_output_tokens": getattr(model, "output_token_limit", None),
-            "supported_methods": methods,
+            "supported_methods": list(methods),
             "available": True,
         })
     return models
 
 
+async def _hf_models(api_key: str) -> list[dict[str, Any]]:
+    url = "https://router.huggingface.co/v1/models"
+    headers = {"Authorization": f"Bearer {api_key}"}
+    timeout = aiohttp.ClientTimeout(total=25)
+    models: list[dict[str, Any]] = []
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with session.get(url, headers=headers) as resp:
+            if resp.status != 200:
+                body = (await resp.text())[:200]
+                raise RuntimeError(f"HF HTTP {resp.status}: {body}")
+            data = await resp.json(content_type=None)
+    items = data if isinstance(data, list) else data.get("data") or data.get("models") or []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        mid = item.get("id") or item.get("name")
+        if not mid:
+            continue
+        models.append({"id": mid, "provider": "huggingface", "available": True})
+    return models[:80]
+
+
 async def discover_ai_models() -> dict[str, Any]:
-    """Consulta Groq e Gemini em threads, sem bloquear o event loop."""
     result: dict[str, Any] = {
         "groq": {"configured": False, "available": False, "models": [], "error": None},
         "gemini": {"configured": False, "available": False, "models": [], "error": None},
-    }
-    providers = {
-        "groq": (os.getenv("GROQ_API_KEY", "").strip(), _groq_models_sync),
-        "gemini": (os.getenv("GEMINI_API_KEY", "").strip(), _gemini_models_sync),
+        "huggingface": {"configured": False, "available": False, "models": [], "error": None},
     }
 
-    async def query(name: str, key: str, function) -> None:
+    groq_key = os.getenv("GROQ_API_KEY", "").strip()
+    gemini_key = os.getenv("GEMINI_API_KEY", "").strip()
+    hf_key = (
+        os.getenv("HUGGINGFACE_API_TOKEN", "").strip()
+        or os.getenv("HF_TOKEN", "").strip()
+    )
+
+    async def query_sync(name: str, key: str, function) -> None:
         if not key:
-            result[name]["error"] = "API key não configurada"
+            result[name]["error"] = "API key nao configurada"
             return
         result[name]["configured"] = True
         try:
@@ -77,17 +99,31 @@ async def discover_ai_models() -> dict[str, Any]:
             result[name]["error"] = f"{type(exc).__name__}: {str(exc)[:300]}"
             log.exception("Falha na descoberta de modelos de %s", name)
 
-    await asyncio.gather(*(query(name, key, fn) for name, (key, fn) in providers.items()))
+    async def query_hf() -> None:
+        if not hf_key:
+            result["huggingface"]["error"] = "API key nao configurada"
+            return
+        result["huggingface"]["configured"] = True
+        try:
+            models = await _hf_models(hf_key)
+            result["huggingface"]["models"] = models
+            result["huggingface"]["available"] = bool(models)
+        except Exception as exc:
+            result["huggingface"]["error"] = f"{type(exc).__name__}: {str(exc)[:300]}"
+            log.exception("Falha na descoberta HF")
+
+    await asyncio.gather(
+        query_sync("groq", groq_key, _groq_models_sync),
+        query_sync("gemini", gemini_key, _gemini_models_sync),
+        query_hf(),
+    )
     return result
 
 
 async def main() -> None:
     import json
     logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
-    try:
-        print(json.dumps(await discover_ai_models(), ensure_ascii=False, indent=2))
-    except Exception:
-        log.exception("Falha no diagnóstico de modelos")
+    print(json.dumps(await discover_ai_models(), ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

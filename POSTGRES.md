@@ -1,24 +1,32 @@
-# PostgreSQL e persistência
+# PostgreSQL neste bot
 
-## Situação atual (v3.1.16)
+## Resposta direta
 
-O bot usa **SQLite** (`DB_PATH`, padrão `hellsing.db`) via `aiosqlite`. Todo o schema (users, economia, tickets, etc.) foi escrito para SQLite (`PRAGMA`, `INSERT OR IGNORE`, `AUTOINCREMENT`).
+**Nesta versao o banco de producao e SQLite (`DB_PATH` / `hellsing.db`).**
 
-A variável `DATABASE_URL` pode ser preenchida no painel (vários hosts injetam isso automaticamente), mas **esta versão ainda grava em SQLite**. Migrar o schema inteiro para PostgreSQL sem quebrar economia, gacha e tickets exige um passo dedicado.
+A variavel `DATABASE_URL` existe no `.env.example` apenas como reserva futura.
+O codigo (`core.py`) abre **aiosqlite** com WAL. Nao ha `asyncpg` nem migracao automatica.
 
-## O que fazer no host agora
+## Voce consegue usar PostgreSQL?
 
-1. Defina `DB_PATH` em um **volume persistente** (não só o disco efêmero do container).
-2. Faça backup periódico do arquivo `.db` (o bot já tem comandos/rotinas de backup em alguns cogs).
-3. Não apague o `.db` ao atualizar o código.
+| Ambiente | Realidade |
+|----------|-----------|
+| Bot-Hosting (plano comum) | Quase sempre **so arquivo local**. Postgres gerenciado e raro/pago. |
+| VPS propria | Sim, mas exige reescrever a camada DB (todas as queries, migrations, backups). |
+| Este ZIP | **Nao** troca sozinho para Postgres. |
 
-## Próximo passo (PostgreSQL de verdade)
+## Por que SQLite continua
 
-Quando for migrar:
+- 1 processo do bot, carga moderada de servidor Discord
+- Zero dependencia externa de DB
+- Backup = copiar `hellsing.db`
+- `transaction()` + WAL ja resolvem race de economia
 
-1. Instalar `asyncpg` no ambiente.
-2. Converter DDL (`SERIAL`/`BIGSERIAL`, `ON CONFLICT DO NOTHING`).
-3. Trocar placeholders `?` por `$1, $2…`.
-4. Remover `PRAGMA` e adaptar `transaction()`.
+## Se no futuro migrar
 
-Até lá, **SQLite em volume persistente** é o caminho estável.
+1. Adicionar `asyncpg` no requirements
+2. Abstrair `get_db()` / `transaction()` para dual backend
+3. Reescrever SQL especifico (PRAGMA, INSERT OR IGNORE, AUTOINCREMENT)
+4. Testar economia (souls, roll, cassino) sob concorrencia
+
+Ate la: use `DB_PATH` e faca backup periodico (`/backup_db` se disponivel).
